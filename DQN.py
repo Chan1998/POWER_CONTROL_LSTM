@@ -9,12 +9,14 @@ EXPLORE = 100000
 FINAL_EPSILON = 0.0 
 INITIAL_EPSILON = 0.8 
 REPLAY_MEMORY = 400 
-BATCH_SIZE = 256 
+BATCH_SIZE = 64
+STEP_SIZE = 5
 
 class BrainDQN:
 
 	def __init__(self,actions,Sensor):
-        
+
+		self.step_size = STEP_SIZE
 		self.replayMemory = deque()
 		self.timeStep = 0
 		self.epsilon = INITIAL_EPSILON
@@ -24,12 +26,12 @@ class BrainDQN:
 		self.hidden1 = 256
 		self.hidden2 = 256
 		self.hidden3 = 512
-        
 		self.createQNetwork()
 
 	def createQNetwork(self):
 
-		W_fc1 = self.weight_variable([self.sensor_dim,self.hidden1])
+		#W_fc1 = self.weight_variable([self.sensor_dim,self.hidden1])
+		W_fc1 = self.weight_variable([self.hidden1, self.hidden1])
 		b_fc1 = self.bias_variable([self.hidden1])
 
 		W_fc2 = self.weight_variable([self.hidden1,self.hidden2])
@@ -41,9 +43,15 @@ class BrainDQN:
 		W_fc4 = self.weight_variable([self.hidden3,self.actions])
 		b_fc4 = self.bias_variable([self.actions])        
 
-		self.stateInput = tf.placeholder("float",[None,self.sensor_dim])
+		self.stateInput = tf.placeholder("float",[None,self.step_size, self.sensor_dim]) #加一个时间步
 
-		h_fc1 = tf.nn.relu(tf.matmul(self.stateInput,W_fc1) + b_fc1)
+		#加入LSTM
+		lstm = tf.contrib.rnn.BasicLSTMCell(self.hidden1, name='q_lstm')
+		lstm_out, state = tf.nn.dynamic_rnn(lstm, self.stateInput, dtype=tf.float32)
+		reduced_out = lstm_out[:, -1, :]
+		reduced_out = tf.reshape(reduced_out, shape=[-1, self.hidden1])
+
+		h_fc1 = tf.nn.relu(tf.matmul(reduced_out,W_fc1) + b_fc1)
 		h_fc2 = tf.nn.relu(tf.matmul(h_fc1,W_fc2) + b_fc2)
 		h_fc3 = tf.nn.tanh(tf.matmul(h_fc2,W_fc3) + b_fc3)        
         
@@ -59,13 +67,50 @@ class BrainDQN:
 		self.session.run(tf.global_variables_initializer())
 
 	def trainQNetwork(self):
-		minibatch = random.sample(self.replayMemory,BATCH_SIZE)
-		state_batch = [data[0] for data in minibatch]
-		action_batch = [data[1] for data in minibatch]
-		reward_batch = [data[2] for data in minibatch]
-		nextState_batch = [data[3] for data in minibatch]
+		# minibatch = random.sample(self.replayMemory,BATCH_SIZE)
+		# state_batch = [data[0] for data in minibatch]
+		# action_batch = [data[1] for data in minibatch]
+		# reward_batch = [data[2] for data in minibatch]
+		# nextState_batch = [data[3] for data in minibatch]
+		idx = np.random.choice(np.arange(len(self.replayMemory) - self.step_size), size=BATCH_SIZE, replace=False)
+		res_batch = []
+		for i in idx:
+			res_temp = []
+			for j in range(self.step_size):
+				res_temp.append(self.replayMemory[i+j])
+
+			res_batch.append(res_temp)		#获取【batch_size,step_size,4,state_size】
+
+		# state_batch = [data[:,0,:] for data in res_batch]
+		state_batch = []
+		for i in res_batch:
+			state_temp = []
+			for step in i:
+				temp = step[0]
+				state_temp.append(temp)
+			state_batch.append(state_temp)
+		state_batch = np.asarray(state_batch)
+
+		# print(np.shape(state_batch))
+
+		#nextState_batch = [data[:, 3] for data in res_batch]
+		nextState_batch = []
+		for i in res_batch:
+			state_temp = []
+			for step in i:
+				temp = step[0]
+				state_temp.append(temp)
+			nextState_batch.append(state_temp)
+		nextState_batch = np.asarray(nextState_batch)
+
+		# print(np.shape(nextState_batch))
+
+		action_batch =  [data[-1][1] for data in res_batch]
+		reward_batch = [data[-1][2] for data in res_batch]
 
 		y_batch = []
+		# print(np.shape(action_batch))
+		# print(np.shape(action_batch))
 		QValue_batch = self.QValue.eval(feed_dict={self.stateInput:nextState_batch})
 		for i in range(0,BATCH_SIZE):
 
@@ -94,9 +139,19 @@ class BrainDQN:
         
 
 	def getAction(self):
-		QValue = self.QValue.eval(feed_dict= {self.stateInput:[self.currentState]})
+		if self.timeStep > self.step_size :
+			# 修改馈入数据
+			temp = []
+			for i in range(self.step_size - 1):  # [step_size-1,4]
+				temp.append(self.replayMemory[-(1 + i)])
+			state_temp = []
+			for i in temp:
+				temp2 = i[0]
+				state_temp.append(temp2)
+			state_temp.append(self.currentState)  # 【5，10】
+			QValue = self.QValue.eval(feed_dict= {self.stateInput:[state_temp]})
 		action = np.zeros(self.actions)
-		if random.random() <= self.epsilon:
+		if  self.timeStep <= self.step_size or random.random() <= self.epsilon:			#这里多加几步初始随机
 			action_index = random.randrange(self.actions)
 			action[action_index] = 1
 		else:
@@ -110,7 +165,18 @@ class BrainDQN:
 		return action,self.recording
     
 	def getAction_test(self,observation):
-		QValue = self.QValue.eval(feed_dict= {self.stateInput:[observation]})
+		temp = []
+		for i in range(self.step_size-1):		#[step_size-1,4]
+			temp.append(self.replayMemory[-(1+i)])
+		#print(np.shape(temp))
+		state_temp = []
+		for i in temp:
+			temp2 = i[0]
+			state_temp.append(temp2)
+		#print(np.shape(state_temp))
+		state_temp.append(observation)  #【5，10】
+
+		QValue = self.QValue.eval(feed_dict= {self.stateInput:[state_temp]})		#这里增加一维，【1，5，10】
 		action = np.zeros(self.actions)
 		action_index = np.argmax(QValue)
 		action[action_index] = 1

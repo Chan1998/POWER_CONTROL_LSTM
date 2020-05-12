@@ -36,7 +36,7 @@ while(recording>0):
     if (recording+1)%500==0:
         
         Loss.append(loss)
-        print "iteration : %d , loss : %f ." %(100000-recording, loss)
+        print ("iteration : %d , loss : %f ." %(100000-recording, loss))
         
         success = 0.0
         fre = 0
@@ -59,7 +59,7 @@ while(recording>0):
         success = success/num
         Success.append(success)
         Fre.append(fre)
-        print "success : %f , step : %f ." %(success , fre)
+        print ("success : %f , step : %f ." %(success , fre))
         
 plt.plot(Loss)
 plt.show()
